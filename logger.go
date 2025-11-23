@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"runtime"
+	"strings"
 	"sync"
 	"time"
 )
@@ -96,6 +97,25 @@ func Init(cfg Config) error {
 func Close() {
 	if seqWriterInstance != nil {
 		seqWriterInstance.Close()
+	}
+}
+
+func ParseLevel(text string) (slog.Level, error) {
+	switch strings.ToLower(text) {
+	case "trace":
+		return LevelTrace, nil
+	case "debug":
+		return LevelDebug, nil
+	case "info":
+		return LevelInfo, nil
+	case "warn", "warning":
+		return LevelWarn, nil
+	case "error":
+		return LevelError, nil
+	case "fatal", "panic":
+		return LevelError, nil
+	default:
+		return LevelInfo, fmt.Errorf("unknown log level '%s'", text)
 	}
 }
 
