@@ -1,0 +1,1 @@
+This is a drop-in replacement log package for logrus using the log/slog package. It logs to stdout, a file and a seq server if desired.
