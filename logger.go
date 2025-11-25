@@ -198,7 +198,7 @@ func (l *Logger) Error(args ...any) {
 	l.log(context.Background(), LevelError, fmt.Sprint(args...))
 }
 
-func (l *Logger) Fatalff(format string, args ...any) {
+func (l *Logger) Fatalf(format string, args ...any) {
 	l.log(context.Background(), LevelError, format, args...)
 	os.Exit(1)
 }
