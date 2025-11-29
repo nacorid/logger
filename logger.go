@@ -148,63 +148,60 @@ func (l *Logger) WithError(err error) *Logger {
 }
 
 func (l *Logger) log(ctx context.Context, level slog.Level, msg string, args ...any) {
-	if len(args) > 0 {
-		msg = fmt.Sprintf(msg, args...)
-	}
-
 	var pcs [1]uintptr
 	runtime.Callers(3, pcs[:])
 	r := slog.NewRecord(time.Now(), level, msg, pcs[0])
+	r.Add(args...)
 	_ = l.logger.Handler().Handle(ctx, r)
 }
 
 func (l *Logger) Tracef(format string, args ...any) {
-	l.log(context.Background(), LevelTrace, format, args...)
+	l.log(context.Background(), LevelTrace, fmt.Sprintf(format, args...))
 }
 
-func (l *Logger) Trace(args ...any) {
-	l.log(context.Background(), LevelTrace, fmt.Sprint(args...))
+func (l *Logger) Trace(msg string, args ...any) {
+	l.log(context.Background(), LevelTrace, msg, args...)
 }
 
 func (l *Logger) Debugf(format string, args ...any) {
-	l.log(context.Background(), LevelDebug, format, args...)
+	l.log(context.Background(), LevelDebug, fmt.Sprintf(format, args...))
 }
 
-func (l *Logger) Debug(args ...any) {
-	l.log(context.Background(), LevelDebug, fmt.Sprint(args...))
+func (l *Logger) Debug(msg string, args ...any) {
+	l.log(context.Background(), LevelDebug, msg, args...)
 }
 
 func (l *Logger) Infof(format string, args ...any) {
-	l.log(context.Background(), LevelInfo, format, args...)
+	l.log(context.Background(), LevelInfo, fmt.Sprintf(format, args...))
 }
 
-func (l *Logger) Info(args ...any) {
-	l.log(context.Background(), LevelInfo, fmt.Sprint(args...))
+func (l *Logger) Info(msg string, args ...any) {
+	l.log(context.Background(), LevelInfo, msg, args...)
 }
 
 func (l *Logger) Warnf(format string, args ...any) {
-	l.log(context.Background(), LevelWarn, format, args...)
+	l.log(context.Background(), LevelWarn, fmt.Sprintf(format, args...))
 }
 
-func (l *Logger) Warn(args ...any) {
-	l.log(context.Background(), LevelWarn, fmt.Sprint(args...))
+func (l *Logger) Warn(msg string, args ...any) {
+	l.log(context.Background(), LevelWarn, msg, args...)
 }
 
 func (l *Logger) Errorf(format string, args ...any) {
-	l.log(context.Background(), LevelError, format, args...)
+	l.log(context.Background(), LevelError, fmt.Sprintf(format, args...))
 }
 
-func (l *Logger) Error(args ...any) {
-	l.log(context.Background(), LevelError, fmt.Sprint(args...))
+func (l *Logger) Error(msg string, args ...any) {
+	l.log(context.Background(), LevelError, msg, args...)
 }
 
 func (l *Logger) Fatalf(format string, args ...any) {
-	l.log(context.Background(), LevelError, format, args...)
+	l.log(context.Background(), LevelError, fmt.Sprintf(format, args...))
 	os.Exit(1)
 }
 
-func (l *Logger) Fatal(args ...any) {
-	l.log(context.Background(), LevelError, fmt.Sprint(args...))
+func (l *Logger) Fatal(msg string, args ...any) {
+	l.log(context.Background(), LevelError, msg, args...)
 	os.Exit(1)
 }
 
@@ -231,49 +228,49 @@ func Tracef(format string, args ...any) {
 	ensureInit()
 	defaultLogger.Tracef(format, args...)
 }
-func Trace(args ...any) {
+func Trace(msg string, args ...any) {
 	ensureInit()
-	defaultLogger.Trace(args...)
+	defaultLogger.Trace(msg, args...)
 }
 func Debugf(format string, args ...any) {
 	ensureInit()
 	defaultLogger.Debugf(format, args...)
 }
-func Debug(args ...any) {
+func Debug(msg string, args ...any) {
 	ensureInit()
-	defaultLogger.Debug(args...)
+	defaultLogger.Debug(msg, args...)
 }
 func Infof(format string, args ...any) {
 	ensureInit()
 	defaultLogger.Infof(format, args...)
 }
-func Info(args ...any) {
+func Info(msg string, args ...any) {
 	ensureInit()
-	defaultLogger.Info(args...)
+	defaultLogger.Info(msg, args...)
 }
 func Warnf(format string, args ...any) {
 	ensureInit()
 	defaultLogger.Warnf(format, args...)
 }
-func Warn(args ...any) {
+func Warn(msg string, args ...any) {
 	ensureInit()
-	defaultLogger.Warn(args...)
+	defaultLogger.Warn(msg, args...)
 }
 func Errorf(format string, args ...any) {
 	ensureInit()
 	defaultLogger.Errorf(format, args...)
 }
-func Error(args ...any) {
+func Error(msg string, args ...any) {
 	ensureInit()
-	defaultLogger.Error(args...)
+	defaultLogger.Error(msg, args...)
 }
 func Fatalf(format string, args ...any) {
 	ensureInit()
 	defaultLogger.Errorf(format, args...)
 }
-func Fatal(args ...any) {
+func Fatal(msg string, args ...any) {
 	ensureInit()
-	defaultLogger.Error(args...)
+	defaultLogger.Error(msg, args...)
 }
 
 type FanoutHandler struct {
