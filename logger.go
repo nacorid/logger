@@ -90,6 +90,7 @@ func Init(cfg Config) error {
 		}
 		logger := slog.New(multi)
 		defaultLogger = &Logger{logger: logger}
+		slog.SetDefault(logger)
 	})
 	return err
 }
