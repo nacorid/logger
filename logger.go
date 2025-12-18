@@ -164,12 +164,20 @@ func (l *Logger) Trace(msg string, args ...any) {
 	l.log(context.Background(), LevelTrace, msg, args...)
 }
 
+func (l *Logger) TraceWithContext(ctx context.Context, msg string, args ...any) {
+	l.log(ctx, LevelTrace, msg, args...)
+}
+
 func (l *Logger) Debugf(format string, args ...any) {
 	l.log(context.Background(), LevelDebug, fmt.Sprintf(format, args...))
 }
 
 func (l *Logger) Debug(msg string, args ...any) {
 	l.log(context.Background(), LevelDebug, msg, args...)
+}
+
+func (l *Logger) DebugWithContext(ctx context.Context, msg string, args ...any) {
+	l.log(ctx, LevelDebug, msg, args...)
 }
 
 func (l *Logger) Infof(format string, args ...any) {
@@ -180,12 +188,20 @@ func (l *Logger) Info(msg string, args ...any) {
 	l.log(context.Background(), LevelInfo, msg, args...)
 }
 
+func (l *Logger) InfoWithContext(ctx context.Context, msg string, args ...any) {
+	l.log(ctx, LevelInfo, msg, args...)
+}
+
 func (l *Logger) Warnf(format string, args ...any) {
 	l.log(context.Background(), LevelWarn, fmt.Sprintf(format, args...))
 }
 
 func (l *Logger) Warn(msg string, args ...any) {
 	l.log(context.Background(), LevelWarn, msg, args...)
+}
+
+func (l *Logger) WarnWithContext(ctx context.Context, msg string, args ...any) {
+	l.log(ctx, LevelWarn, msg, args...)
 }
 
 func (l *Logger) Errorf(format string, args ...any) {
@@ -196,6 +212,10 @@ func (l *Logger) Error(msg string, args ...any) {
 	l.log(context.Background(), LevelError, msg, args...)
 }
 
+func (l *Logger) ErrorWithContext(ctx context.Context, msg string, args ...any) {
+	l.log(ctx, LevelError, msg, args...)
+}
+
 func (l *Logger) Fatalf(format string, args ...any) {
 	l.log(context.Background(), LevelError, fmt.Sprintf(format, args...))
 	os.Exit(1)
@@ -203,6 +223,11 @@ func (l *Logger) Fatalf(format string, args ...any) {
 
 func (l *Logger) Fatal(msg string, args ...any) {
 	l.log(context.Background(), LevelError, msg, args...)
+	os.Exit(1)
+}
+
+func (l *Logger) FatalWithContext(ctx context.Context, msg string, args ...any) {
+	l.log(ctx, LevelError, msg, args...)
 	os.Exit(1)
 }
 
@@ -233,6 +258,10 @@ func Trace(msg string, args ...any) {
 	ensureInit()
 	defaultLogger.Trace(msg, args...)
 }
+func TraceWithContext(ctx context.Context, msg string, args ...any) {
+	ensureInit()
+	defaultLogger.TraceWithContext(ctx, msg, args...)
+}
 func Debugf(format string, args ...any) {
 	ensureInit()
 	defaultLogger.Debugf(format, args...)
@@ -240,6 +269,10 @@ func Debugf(format string, args ...any) {
 func Debug(msg string, args ...any) {
 	ensureInit()
 	defaultLogger.Debug(msg, args...)
+}
+func DebugWithContext(ctx context.Context, msg string, args ...any) {
+	ensureInit()
+	defaultLogger.DebugWithContext(ctx, msg, args...)
 }
 func Infof(format string, args ...any) {
 	ensureInit()
@@ -249,6 +282,10 @@ func Info(msg string, args ...any) {
 	ensureInit()
 	defaultLogger.Info(msg, args...)
 }
+func InfoWithContext(ctx context.Context, msg string, args ...any) {
+	ensureInit()
+	defaultLogger.InfoWithContext(ctx, msg, args...)
+}
 func Warnf(format string, args ...any) {
 	ensureInit()
 	defaultLogger.Warnf(format, args...)
@@ -256,6 +293,10 @@ func Warnf(format string, args ...any) {
 func Warn(msg string, args ...any) {
 	ensureInit()
 	defaultLogger.Warn(msg, args...)
+}
+func WarnWithContext(ctx context.Context, msg string, args ...any) {
+	ensureInit()
+	defaultLogger.WarnWithContext(ctx, msg, args...)
 }
 func Errorf(format string, args ...any) {
 	ensureInit()
@@ -265,6 +306,10 @@ func Error(msg string, args ...any) {
 	ensureInit()
 	defaultLogger.Error(msg, args...)
 }
+func ErrorWithContext(ctx context.Context, msg string, args ...any) {
+	ensureInit()
+	defaultLogger.ErrorWithContext(ctx, msg, args...)
+}
 func Fatalf(format string, args ...any) {
 	ensureInit()
 	defaultLogger.Errorf(format, args...)
@@ -272,6 +317,10 @@ func Fatalf(format string, args ...any) {
 func Fatal(msg string, args ...any) {
 	ensureInit()
 	defaultLogger.Error(msg, args...)
+}
+func FatalWithContext(ctx context.Context, msg string, args ...any) {
+	ensureInit()
+	defaultLogger.FatalWithContext(ctx, msg, args...)
 }
 
 type FanoutHandler struct {
