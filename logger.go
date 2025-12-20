@@ -1,17 +1,18 @@
 package logger
 
 import (
-	"bytes"
 	"context"
 	"fmt"
 	"io"
 	"log/slog"
-	"net/http"
 	"os"
+	"path/filepath"
 	"runtime"
 	"strings"
 	"sync"
 	"time"
+
+	slogseq "github.com/sokkalf/slog-seq"
 )
 
 const (
@@ -25,9 +26,9 @@ const (
 type Fields map[string]any
 
 var (
-	defaultLogger     *Logger
-	seqWriterInstance *SeqWriter
-	once              sync.Once
+	defaultLogger  *Logger
+	slogseqHandler *slogseq.SeqHandler
+	once           sync.Once
 )
 
 type Config struct {
@@ -42,15 +43,22 @@ type Config struct {
 
 func Init(cfg Config) error {
 	var err error
+
 	once.Do(func() {
+		replace := func(groups []string, a slog.Attr) slog.Attr {
+			if a.Key == slog.SourceKey {
+				s := a.Value.Any().(*slog.Source)
+				s.File = filepath.Base(s.File)
+				return slog.Any(a.Key, s)
+			}
+			if a.Key == slog.LevelKey && a.Value.Any().(slog.Level) == LevelTrace {
+				return slog.Attr{Key: slog.LevelKey, Value: slog.StringValue("TRACE")}
+			}
+			return a
+		}
 		optsConsole := &slog.HandlerOptions{
-			Level: cfg.ConsoleLevel,
-			ReplaceAttr: func(groups []string, a slog.Attr) slog.Attr {
-				if a.Key == slog.LevelKey && a.Value.Any().(slog.Level) == LevelTrace {
-					return slog.Attr{Key: slog.LevelKey, Value: slog.StringValue("TRACE")}
-				}
-				return a
-			},
+			Level:       cfg.ConsoleLevel,
+			ReplaceAttr: replace,
 		}
 		consoleHandler := slog.NewTextHandler(os.Stdout, optsConsole)
 
@@ -61,7 +69,7 @@ func Init(cfg Config) error {
 				err = e
 				return
 			}
-			fileHandler = slog.NewJSONHandler(f, &slog.HandlerOptions{Level: cfg.FileLevel})
+			fileHandler = slog.NewJSONHandler(f, &slog.HandlerOptions{Level: cfg.FileLevel, ReplaceAttr: replace})
 		} else {
 			fileHandler = slog.NewJSONHandler(io.Discard, nil)
 		}
@@ -74,13 +82,16 @@ func Init(cfg Config) error {
 			if cfg.SeqBatchInterval == 0 {
 				cfg.SeqBatchInterval = 2 * time.Second
 			}
-			seqWriter := newSeqWriter(cfg.SeqServerURL, cfg.SeqAPIKey, cfg.SeqBatchSize, cfg.SeqBatchInterval)
-			seqHandler = slog.NewJSONHandler(seqWriter, &slog.HandlerOptions{
-				Level: LevelTrace,
-				ReplaceAttr: func(groups []string, a slog.Attr) slog.Attr {
-					return a
-				},
-			})
+			_, slogseqHandler = slogseq.NewLogger(cfg.SeqServerURL+"/ingest/clef",
+				slogseq.WithAPIKey(cfg.SeqAPIKey),
+				slogseq.WithBatchSize(cfg.SeqBatchSize),
+				slogseq.WithFlushInterval(cfg.SeqBatchInterval),
+				slogseq.WithHandlerOptions(&slog.HandlerOptions{
+					Level:       LevelTrace,
+					ReplaceAttr: replace,
+				}),
+			)
+			seqHandler = slogseqHandler
 		} else {
 			seqHandler = slog.NewJSONHandler(io.Discard, nil)
 		}
@@ -95,9 +106,14 @@ func Init(cfg Config) error {
 	return err
 }
 
+func SetDefault(l *slog.Logger) {
+	defaultLogger = &Logger{logger: l}
+	slog.SetDefault(l)
+}
+
 func Close() {
-	if seqWriterInstance != nil {
-		seqWriterInstance.Close()
+	if slogseqHandler != nil {
+		_ = slogseqHandler.Close()
 	}
 }
 
@@ -370,102 +386,4 @@ func (h *FanoutHandler) WithGroup(name string) slog.Handler {
 		newHandlers[i] = handler.WithGroup(name)
 	}
 	return &FanoutHandler{handlers: newHandlers}
-}
-
-type SeqWriter struct {
-	url    string
-	apiKey string
-	client *http.Client
-
-	logChan chan []byte
-	done    chan struct{}
-	wg      sync.WaitGroup
-}
-
-func newSeqWriter(serverURL, apiKey string, batchSize int, interval time.Duration) *SeqWriter {
-	s := &SeqWriter{
-		url:     fmt.Sprintf("%s/api/evvents/raw", serverURL),
-		apiKey:  apiKey,
-		client:  &http.Client{Timeout: 10 * time.Second},
-		logChan: make(chan []byte, 4096),
-		done:    make(chan struct{}),
-	}
-
-	s.wg.Add(1)
-	go s.run(batchSize, interval)
-	return s
-}
-
-func (s *SeqWriter) Write(p []byte) (n int, err error) {
-	data := make([]byte, len(p))
-	copy(data, p)
-
-	select {
-	case s.logChan <- data:
-		return len(p), nil
-	case <-s.done:
-		return 0, io.ErrClosedPipe
-	default:
-		return 0, fmt.Errorf("seq buffer full, dropping log")
-	}
-}
-
-func (s *SeqWriter) Close() error {
-	close(s.done)
-	s.wg.Wait()
-	return nil
-}
-
-func (s *SeqWriter) run(batchSize int, interval time.Duration) {
-	defer s.wg.Done()
-
-	ticker := time.NewTicker(interval)
-	defer ticker.Stop()
-
-	var batch [][]byte
-
-	flush := func() {
-		if len(batch) == 0 {
-			return
-		}
-		s.sendBatch(batch)
-		batch = nil
-	}
-
-	for {
-		select {
-		case log := <-s.logChan:
-			batch = append(batch, log)
-			if len(batch) == batchSize {
-				flush()
-				ticker.Reset(interval)
-			}
-		case <-ticker.C:
-			flush()
-		case <-s.done:
-			for len(s.logChan) > 0 {
-				batch = append(batch, <-s.logChan)
-			}
-			flush()
-			return
-		}
-	}
-}
-
-func (s *SeqWriter) sendBatch(logs [][]byte) {
-	payload := bytes.Join(logs, []byte(""))
-
-	req, err := http.NewRequest("POST", s.url, bytes.NewBuffer(payload))
-	if err != nil {
-		return
-	}
-	req.Header.Set("Content-Type", "application/json")
-	if s.apiKey != "" {
-		req.Header.Set("X-Seq-ApiKey", s.apiKey)
-	}
-
-	resp, err := s.client.Do(req)
-	if err == nil {
-		defer resp.Body.Close()
-	}
 }
