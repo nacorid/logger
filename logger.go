@@ -328,11 +328,11 @@ func ErrorWithContext(ctx context.Context, msg string, args ...any) {
 }
 func Fatalf(format string, args ...any) {
 	ensureInit()
-	defaultLogger.Errorf(format, args...)
+	defaultLogger.Fatalf(format, args...)
 }
 func Fatal(msg string, args ...any) {
 	ensureInit()
-	defaultLogger.Error(msg, args...)
+	defaultLogger.Fatal(msg, args...)
 }
 func FatalWithContext(ctx context.Context, msg string, args ...any) {
 	ensureInit()
