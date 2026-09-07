@@ -2,6 +2,7 @@ package logger
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -26,10 +27,26 @@ const (
 type Fields map[string]any
 
 var (
-	defaultLogger  *Logger
-	slogseqHandler *slogseq.SeqHandler
-	once           sync.Once
+	mu            sync.RWMutex
+	defaultLogger = &Logger{logger: slog.Default()}
+	closers       []io.Closer
+	packagePrefix string
 )
+
+func init() {
+
+	var pcs [1]uintptr
+	runtime.Callers(1, pcs[:])
+	fn := runtime.FuncForPC(pcs[0]).Name()
+	lastSlash := strings.LastIndex(fn, "/")
+	if lastSlash == -1 {
+		lastSlash = 0
+	}
+	dot := strings.Index(fn[lastSlash:], ".")
+	if dot != -1 {
+		packagePrefix = fn[:lastSlash+dot+1]
+	}
+}
 
 type Config struct {
 	LogFilePath      string
@@ -42,79 +59,106 @@ type Config struct {
 }
 
 func Init(cfg Config) error {
-	var err error
+	mu.Lock()
+	defer mu.Unlock()
 
-	once.Do(func() {
-		replace := func(groups []string, a slog.Attr) slog.Attr {
-			if a.Key == slog.SourceKey {
-				s := a.Value.Any().(*slog.Source)
+	closeInternal()
+
+	replace := func(groups []string, a slog.Attr) slog.Attr {
+		if a.Key == slog.SourceKey {
+			if s, ok := a.Value.Any().(*slog.Source); ok && s != nil {
 				s.File = filepath.Base(s.File)
 				return slog.Any(a.Key, s)
 			}
-			if a.Key == slog.LevelKey && a.Value.Any().(slog.Level) == LevelTrace {
-				return slog.Attr{Key: slog.LevelKey, Value: slog.StringValue("TRACE")}
-			}
-			return a
 		}
-		optsConsole := &slog.HandlerOptions{
-			Level:       cfg.ConsoleLevel,
+		if a.Key == slog.LevelKey {
+			if lvl, ok := a.Value.Any().(slog.Level); ok && lvl == LevelTrace {
+				return slog.String(slog.LevelKey, "TRACE")
+			}
+		}
+		return a
+	}
+
+	optsConsole := &slog.HandlerOptions{
+		Level:       cfg.ConsoleLevel,
+		ReplaceAttr: replace,
+		AddSource:   true,
+	}
+	consoleHandler := slog.NewTextHandler(os.Stdout, optsConsole)
+
+	var fileHandler slog.Handler
+	if cfg.LogFilePath != "" {
+		f, err := os.OpenFile(cfg.LogFilePath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+		if err != nil {
+			return fmt.Errorf("failed to open log file: %w", err)
+		}
+		closers = append(closers, f)
+		fileHandler = slog.NewJSONHandler(f, &slog.HandlerOptions{
+			Level:       cfg.FileLevel,
 			ReplaceAttr: replace,
-		}
-		consoleHandler := slog.NewTextHandler(os.Stdout, optsConsole)
+			AddSource:   true,
+		})
+	} else {
+		fileHandler = slog.NewJSONHandler(io.Discard, nil)
+	}
 
-		var fileHandler slog.Handler
-		if cfg.LogFilePath != "" {
-			f, e := os.OpenFile(cfg.LogFilePath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
-			if e != nil {
-				err = e
-				return
-			}
-			fileHandler = slog.NewJSONHandler(f, &slog.HandlerOptions{Level: cfg.FileLevel, ReplaceAttr: replace})
-		} else {
-			fileHandler = slog.NewJSONHandler(io.Discard, nil)
+	var seqHandler slog.Handler
+	if cfg.SeqServerURL != "" {
+		if cfg.SeqBatchSize <= 0 {
+			cfg.SeqBatchSize = 50
 		}
+		if cfg.SeqBatchInterval <= 0 {
+			cfg.SeqBatchInterval = 2 * time.Second
+		}
+		_, slogseqHandler := slogseq.NewLogger(
+			cfg.SeqServerURL+"/ingest/clef",
+			slogseq.WithAPIKey(cfg.SeqAPIKey),
+			slogseq.WithBatchSize(cfg.SeqBatchSize),
+			slogseq.WithFlushInterval(cfg.SeqBatchInterval),
+			slogseq.WithHandlerOptions(&slog.HandlerOptions{
+				Level:       LevelTrace,
+				ReplaceAttr: replace,
+				AddSource:   true,
+			}),
+		)
+		closers = append(closers, slogseqHandler)
+		seqHandler = slogseqHandler
+	} else {
+		seqHandler = slog.NewJSONHandler(io.Discard, nil)
+	}
 
-		var seqHandler slog.Handler
-		if cfg.SeqServerURL != "" {
-			if cfg.SeqBatchSize == 0 {
-				cfg.SeqBatchSize = 50
-			}
-			if cfg.SeqBatchInterval == 0 {
-				cfg.SeqBatchInterval = 2 * time.Second
-			}
-			_, slogseqHandler = slogseq.NewLogger(cfg.SeqServerURL+"/ingest/clef",
-				slogseq.WithAPIKey(cfg.SeqAPIKey),
-				slogseq.WithBatchSize(cfg.SeqBatchSize),
-				slogseq.WithFlushInterval(cfg.SeqBatchInterval),
-				slogseq.WithHandlerOptions(&slog.HandlerOptions{
-					Level:       LevelTrace,
-					ReplaceAttr: replace,
-				}),
-			)
-			seqHandler = slogseqHandler
-		} else {
-			seqHandler = slog.NewJSONHandler(io.Discard, nil)
-		}
+	multi := &FanoutHandler{
+		handlers: []slog.Handler{consoleHandler, fileHandler, seqHandler},
+	}
+	logger := slog.New(multi)
+	defaultLogger = &Logger{logger: logger}
+	slog.SetDefault(logger)
 
-		multi := &FanoutHandler{
-			handlers: []slog.Handler{consoleHandler, fileHandler, seqHandler},
-		}
-		logger := slog.New(multi)
-		defaultLogger = &Logger{logger: logger}
-		slog.SetDefault(logger)
-	})
-	return err
+	return nil
 }
 
 func SetDefault(l *slog.Logger) {
+	mu.Lock()
+	defer mu.Unlock()
 	defaultLogger = &Logger{logger: l}
 	slog.SetDefault(l)
 }
 
-func Close() {
-	if slogseqHandler != nil {
-		_ = slogseqHandler.Close()
+func closeInternal() error {
+	var errs []error
+	for _, c := range closers {
+		if err := c.Close(); err != nil {
+			errs = append(errs, err)
+		}
 	}
+	closers = nil
+	return errors.Join(errs...)
+}
+
+func Close() error {
+	mu.Lock()
+	defer mu.Unlock()
+	return closeInternal()
 }
 
 func ParseLevel(text string) (slog.Level, error) {
@@ -134,14 +178,6 @@ func ParseLevel(text string) (slog.Level, error) {
 	default:
 		return LevelInfo, fmt.Errorf("unknown log level '%s'", text)
 	}
-}
-
-var LevelNames = map[slog.Leveler]string{
-	LevelTrace: "TRACE",
-	LevelDebug: "DEBUG",
-	LevelInfo:  "INFO",
-	LevelWarn:  "WARN",
-	LevelError: "ERROR",
 }
 
 type Logger struct {
@@ -164,12 +200,38 @@ func (l *Logger) WithError(err error) *Logger {
 	return &Logger{logger: l.logger.With("error", err)}
 }
 
+func getCallerPC() uintptr {
+	if packagePrefix == "" {
+		return 0
+	}
+	var pcs [20]uintptr
+	n := runtime.Callers(2, pcs[:])
+	if n == 0 {
+		return 0
+	}
+	frames := runtime.CallersFrames(pcs[:n])
+	for {
+		frame, more := frames.Next()
+		if strings.HasPrefix(frame.Function, packagePrefix) {
+			if !more {
+				break
+			}
+			continue
+		}
+		return frame.PC
+	}
+	return 0
+}
+
 func (l *Logger) log(ctx context.Context, level slog.Level, msg string, args ...any) {
-	var pcs [1]uintptr
-	runtime.Callers(3, pcs[:])
-	r := slog.NewRecord(time.Now(), level, msg, pcs[0])
+	if !l.logger.Handler().Enabled(ctx, level) {
+		return
+	}
+	r := slog.NewRecord(time.Now(), level, msg, getCallerPC())
 	r.Add(args...)
-	_ = l.logger.Handler().Handle(ctx, r)
+	if err := l.logger.Handler().Handle(ctx, r); err != nil {
+		fmt.Fprintf(os.Stderr, "logger: failed to write log record: %v\n", err)
+	}
 }
 
 func (l *Logger) Tracef(format string, args ...any) {
@@ -234,108 +296,128 @@ func (l *Logger) ErrorWithContext(ctx context.Context, msg string, args ...any) 
 
 func (l *Logger) Fatalf(format string, args ...any) {
 	l.log(context.Background(), LevelError, fmt.Sprintf(format, args...))
+	_ = Close()
 	os.Exit(1)
 }
 
 func (l *Logger) Fatal(msg string, args ...any) {
 	l.log(context.Background(), LevelError, msg, args...)
+	_ = Close()
 	os.Exit(1)
 }
 
 func (l *Logger) FatalWithContext(ctx context.Context, msg string, args ...any) {
 	l.log(ctx, LevelError, msg, args...)
+	_ = Close()
 	os.Exit(1)
 }
 
-func ensureInit() {
-	if defaultLogger == nil {
-		defaultLogger = &Logger{logger: slog.New(slog.NewTextHandler(os.Stdout, nil))}
-	}
-}
-
 func WithFields(f Fields) *Logger {
-	ensureInit()
+	mu.RLock()
+	defer mu.RUnlock()
 	return defaultLogger.WithFields(f)
 }
+
 func WithField(k string, v any) *Logger {
-	ensureInit()
+	mu.RLock()
+	defer mu.RUnlock()
 	return defaultLogger.WithField(k, v)
 }
+
 func WithError(err error) *Logger {
-	ensureInit()
+	mu.RLock()
+	defer mu.RUnlock()
 	return defaultLogger.WithError(err)
 }
 
 func Tracef(format string, args ...any) {
-	ensureInit()
+	mu.RLock()
+	defer mu.RUnlock()
 	defaultLogger.Tracef(format, args...)
 }
 func Trace(msg string, args ...any) {
-	ensureInit()
+	mu.RLock()
+	defer mu.RUnlock()
 	defaultLogger.Trace(msg, args...)
 }
 func TraceWithContext(ctx context.Context, msg string, args ...any) {
-	ensureInit()
+	mu.RLock()
+	defer mu.RUnlock()
 	defaultLogger.TraceWithContext(ctx, msg, args...)
 }
 func Debugf(format string, args ...any) {
-	ensureInit()
+	mu.RLock()
+	defer mu.RUnlock()
 	defaultLogger.Debugf(format, args...)
 }
 func Debug(msg string, args ...any) {
-	ensureInit()
+	mu.RLock()
+	defer mu.RUnlock()
 	defaultLogger.Debug(msg, args...)
 }
 func DebugWithContext(ctx context.Context, msg string, args ...any) {
-	ensureInit()
+	mu.RLock()
+	defer mu.RUnlock()
 	defaultLogger.DebugWithContext(ctx, msg, args...)
 }
 func Infof(format string, args ...any) {
-	ensureInit()
+	mu.RLock()
+	defer mu.RUnlock()
 	defaultLogger.Infof(format, args...)
 }
 func Info(msg string, args ...any) {
-	ensureInit()
+	mu.RLock()
+	defer mu.RUnlock()
 	defaultLogger.Info(msg, args...)
 }
 func InfoWithContext(ctx context.Context, msg string, args ...any) {
-	ensureInit()
+	mu.RLock()
+	defer mu.RUnlock()
 	defaultLogger.InfoWithContext(ctx, msg, args...)
 }
 func Warnf(format string, args ...any) {
-	ensureInit()
+	mu.RLock()
+	defer mu.RUnlock()
 	defaultLogger.Warnf(format, args...)
 }
 func Warn(msg string, args ...any) {
-	ensureInit()
+	mu.RLock()
+	defer mu.RUnlock()
 	defaultLogger.Warn(msg, args...)
 }
 func WarnWithContext(ctx context.Context, msg string, args ...any) {
-	ensureInit()
+	mu.RLock()
+	defer mu.RUnlock()
 	defaultLogger.WarnWithContext(ctx, msg, args...)
 }
 func Errorf(format string, args ...any) {
-	ensureInit()
+	mu.RLock()
+	defer mu.RUnlock()
 	defaultLogger.Errorf(format, args...)
 }
 func Error(msg string, args ...any) {
-	ensureInit()
+	mu.RLock()
+	defer mu.RUnlock()
 	defaultLogger.Error(msg, args...)
 }
 func ErrorWithContext(ctx context.Context, msg string, args ...any) {
-	ensureInit()
+	mu.RLock()
+	defer mu.RUnlock()
 	defaultLogger.ErrorWithContext(ctx, msg, args...)
 }
 func Fatalf(format string, args ...any) {
-	ensureInit()
+	mu.RLock()
+	defer mu.RUnlock()
 	defaultLogger.Fatalf(format, args...)
 }
 func Fatal(msg string, args ...any) {
-	ensureInit()
+	mu.RLock()
+	defer mu.RUnlock()
 	defaultLogger.Fatal(msg, args...)
 }
 func FatalWithContext(ctx context.Context, msg string, args ...any) {
-	ensureInit()
+	mu.RLock()
+	defer mu.RUnlock()
 	defaultLogger.FatalWithContext(ctx, msg, args...)
 }
 
@@ -353,23 +435,15 @@ func (h *FanoutHandler) Enabled(ctx context.Context, l slog.Level) bool {
 }
 
 func (h *FanoutHandler) Handle(ctx context.Context, r slog.Record) error {
-	var errors []error
+	var errs []error
 	for _, handler := range h.handlers {
 		if handler.Enabled(ctx, r.Level) {
-			err := handler.Handle(ctx, r)
-			if err != nil {
-				errors = append(errors, err)
+			if err := handler.Handle(ctx, r); err != nil {
+				errs = append(errs, err)
 			}
 		}
 	}
-	if len(errors) > 0 {
-		var err error
-		for _, e := range errors {
-			err = fmt.Errorf("%s\n%s", err, e)
-		}
-		return err
-	}
-	return nil
+	return errors.Join(errs...)
 }
 
 func (h *FanoutHandler) WithAttrs(attrs []slog.Attr) slog.Handler {
