@@ -36,7 +36,7 @@ var (
 func init() {
 
 	var pcs [1]uintptr
-	runtime.Callers(1, pcs[:])
+	runtime.Callers(0, pcs[:])
 	fn := runtime.FuncForPC(pcs[0]).Name()
 	lastSlash := strings.LastIndex(fn, "/")
 	if lastSlash == -1 {
